@@ -1,6 +1,6 @@
 """Make your user-facing Celery jobs totally awesomer"""
 
-VERSION = (0, 1, 0, 'b1')
+VERSION = (0, 3, 1, '')
 __version__ = '.'.join(map(str, VERSION[0:3])) + ''.join(VERSION[3:])
 __author__ = 'Wes Winham'
 __contact__ = 'winhamwr@gmail.com'
@@ -14,4 +14,4 @@ __all__ = (
 
 # -eof meta-
 
-from jobtastic.task import JobtasticTask
+from jobtastic.task import JobtasticTask  # NOQA

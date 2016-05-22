@@ -2,8 +2,9 @@
 
 import codecs
 import os
+import sys
 
-from setuptools import setup
+from setuptools import setup, Command
 
 long_description = codecs.open("README.md", "r", "utf-8").read()
 
@@ -39,12 +40,14 @@ re_doc = re.compile(r'^"""(.+?)"""')
 # We don't need the quotes
 rq = lambda s: s.strip("\"'")
 
+
 def add_default(m):
     """
     Get standard ``__foo__ = 'bar'`` pairs as a (foo, bar) tuple.
     """
     attr_name, attr_value = m.groups()
     return ((attr_name, rq(attr_value)), )
+
 
 def add_version(m):
     v = list(map(rq, m.groups()[0].split(', ')))
@@ -80,6 +83,69 @@ try:
 finally:
     meta_fh.close()
 
+# -*- Installation Requires -*-
+
+
+def strip_comments(l):
+    return l.split('#', 1)[0].strip()
+
+
+def reqs(*f):
+    return list(filter(None, [strip_comments(l) for l in open(
+        os.path.join(os.getcwd(), 'requirements', *f)).readlines()]))
+
+install_requires = reqs('default.txt')
+tests_require = reqs('tests.txt')
+
+# -*- Test Runners -*-
+
+
+class RunDjangoTests(Command):
+    description = 'Run the django test suite from the tests dir.'
+    user_options = []
+    extra_env = {}
+    extra_args = []
+
+    def run(self):
+        for env_name, env_value in self.extra_env.items():
+            os.environ[env_name] = str(env_value)
+
+        this_dir = os.getcwd()
+        testproj_dir = os.path.join(this_dir, 'test_projects')
+        django_testproj_dir = os.path.join(testproj_dir, 'django')
+        os.chdir(django_testproj_dir)
+        sys.path.append(django_testproj_dir)
+
+        os.environ['DJANGO_SETTINGS_MODULE'] = os.environ.get(
+            'DJANGO_SETTINGS_MODULE',
+            'testproj.settings',
+        )
+
+        django_1_4 = False
+        try:
+            from django.core.management import execute_manager as run_command
+            django_1_4 = True
+        except ImportError:
+            # execute_manager was renamed in Django 1.6
+            from django.core.management import (
+                execute_from_command_line as run_command,
+            )
+
+        modified_args = [__file__, 'test'] + self.extra_args
+        if django_1_4:
+            settings_file = os.environ['DJANGO_SETTINGS_MODULE']
+            settings_mod = __import__(settings_file, {}, {}, [''])
+            run_command(settings_mod, argv=modified_args)
+        else:
+            run_command(modified_args)
+
+    def initialize_options(self):
+        pass
+
+    def finalize_options(self):
+        pass
+
+
 setup(
     name=NAME,
     version=meta['VERSION'],
@@ -92,9 +158,9 @@ setup(
     license='BSD',
     platforms=['any'],
     classifiers=CLASSIFIERS,
-    install_requires=[
-        'django>=1.3',
-        'django-celery',
-        'celery>=2.5',
-    ],
+    cmdclass={
+        'test': RunDjangoTests,
+    },
+    install_requires=install_requires,
+    tests_require=tests_require,
 )

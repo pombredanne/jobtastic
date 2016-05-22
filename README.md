@@ -1,5 +1,7 @@
 # jobtastic- Celery tasks plus more awesome
 
+[![Build Status](https://travis-ci.org/PolicyStat/jobtastic.png?branch=master)](https://travis-ci.org/PolicyStat/jobtastic)
+
 Jobtastic makes your user-responsive long-running
 [Celery](http://celeryproject.org) jobs totally awesomer.
 Celery is the ubiquitous python job queueing tool
@@ -13,12 +15,13 @@ Jobtastic gives you goodies like:
 * Easy progress estimation/reporting
 * Job status feedback
 * Helper methods for gracefully handling a dead task broker
-  (`delay_or_run` and `delay_or_fail`)
+  (`delay_or_eager` and `delay_or_fail`)
 * Super-easy result caching
 * [Thundering herd](http://en.wikipedia.org/wiki/Thundering_herd_problem) avoidance
 * Integration with a
   [celery jQuery plugin](https://github.com/PolicyStat/jquery-celery)
   for easy client-side progress display
+* Memory leak detection in a task run
 
 Make your Celery jobs more awesome with Jobtastic.
 
@@ -36,9 +39,18 @@ You could write all of the stuff yourself, but why?
 
 ## Installation
 
-1. Get the project source and install it
+1. Install gcc and the python C headers
+   so that you can build [psutil](https://github.com/giampaolo/psutil/blob/master/INSTALL.rst).
 
-    $ pip install jobtastic
+  On Ubuntu, that means running:
+
+  `$ sudo apt-get install build-essential python-dev python2.6-dev python2.7-dev rabbitmq-server`
+
+  On OS X, you'll need to run the "XcodeTools" installer.
+
+2. Get the project source and install it
+
+    `$ pip install jobtastic`
 
 ## Creating Your First Task
 
@@ -56,7 +68,7 @@ class LotsOfDivisionTask(JobtasticTask):
 	# These are the Task kwargs that matter for caching purposes
 	significant_kwargs = [
 		('numerators', str),
-		('denominator', str),
+		('denominators', str),
 	]
 	# How long should we give a task before assuming it has failed?
 	herd_avoidance_timeout = 60  # Shouldn't take more than 60 seconds
@@ -76,7 +88,11 @@ class LotsOfDivisionTask(JobtasticTask):
 			numerator, denominator = divisors
 			results.append(numerator / denominator)
 			# Let's let everyone know how we're doing
-			self.update_progress(count, divisions_to_do, update_frequency=10)
+			self.update_progress(
+                count,
+                divisions_to_do,
+                update_frequency=update_frequency,
+            )
 			# Let's pretend that we're using the computers that landed us on the moon
 			sleep(0.1)
 
@@ -118,7 +134,7 @@ def lets_divide(request):
 	step = 10
 
 	# If we can't connect to the backend, let's not just 500. k?
-	result = LotsOfDivisionTask().delay_or_fail(
+	result = LotsOfDivisionTask.delay_or_fail(
 		numerators=range(0, step * iterations * 2, step * 2),
 		denominators=range(1, step * iterations, step),
 	)
@@ -147,12 +163,12 @@ def lets_divide():
 	iterations = request.args.get('iterations', 1000)
 	step = 10
 
-	result = LotsOfDivisionTask().delay_or_fail(
+	result = LotsOfDivisionTask.delay_or_fail(
 		numerators=range(0, step * iterations * 2, step * 2),
 		denominators=range(1, step * iterations, step),
 	)
 
-	return render_template('my_app/lets_divide.html', task_id=request.task_id)
+	return render_template('my_app/lets_divide.html', task_id=result.task_id)
 ```
 
 ### Required Member Variables
@@ -177,7 +193,7 @@ so Jobtastic can do smart things.
 ``` python
 significant_kwargs = [
 	('numerators', str),
-	('denominator', str),
+	('denominators', str),
 ]
 ```
 
@@ -221,7 +237,7 @@ should try to just re-use the cached result.
 The default is -1,
 meaning don't do any caching.
 Remember,
-`JobtasticTask` uses your `signficant_kwargs` to determine what is identical.
+`JobtasticTask` uses your `significant_kwargs` to determine what is identical.
 
 #### cache_prefix
 
@@ -233,6 +249,25 @@ If you have two different tasks that should share caching,
 or you have some very-odd cache key conflict,
 then you can change this yourself.
 You probably don't need to.
+
+#### memleak_threshold
+
+Set this value to monitor your tasks
+for any runs that increase the memory usage
+by more than this number of Megabytes
+(the SI definition).
+Individual task runs that increase resident memory
+by more than this threshold
+get some extra logging
+in order to help you debug the problem.
+By default, it logs the following via standard Celery logging:
+ * The memory increase
+ * The memory starting value
+ * The memory ending value
+ * The task's kwargs
+
+If you'd like to customize this behavior,
+you can override the `warn_of_memory_leak` method in your own `Task`.
 
 ### Method to Override
 
@@ -304,30 +339,32 @@ and it's not fun to handle that exception every single place
 you might use Celery.
 Jobtastic has your back.
 
-Included are `delay_or_run` and `delay_or_fail` methods
+Included are `delay_or_eager` and `delay_or_fail` methods
 that handle a dead backend
 and do something a little more production-friendly.
 
 Note: One very important caveat with `JobtasticTask` is that
 all of your arguments must be keyword arguments.
 
-Note: This is a limitation of the current `signficant_kwargs` implementation,
+Note: This is a limitation of the current `significant_kwargs` implementation,
 and totally fixable if someone wants to submit a pull request.
 
-### delay_or_run
+### delay_or_eager
 
-If your broker is behaving,
+If your broker is behaving itself,
 this guy acts just like `delay()`.
 In the case that your broker is down,
 though,
 it just goes ahead and runs the task in the current process
 and skips sending the task to a worker.
+You get back a nice shiny `EagerResult` object,
+which behaves just like the `AsyncResult` you were expecting.
 If you have a task that realistically only takes a few seconds to run,
-this might be better than giving an error message.
+this might be better than giving yours users an error message.
 
 ### delay_or_fail
 
-Like `delay_or_run`,
+Like `delay_or_eager`,
 this helps you handle a dead broker.
 Instead of running your task in the current process,
 this actually generates a task result representing the failure.
@@ -338,7 +375,7 @@ Maybe send them a fruit basket?
 
 For tasks that might take a while
 or consume a lot of RAM,
-you're probably better off using this than `delay_or_run`
+you're probably better off using this than `delay_or_eager`
 because you don't want to make a resource problem worse.
 
 ## Client Side Handling
@@ -408,11 +445,55 @@ as it could be caused by any number of application errors.
 In general, you probably want to try again if this happens,
 but if it persists, you'll want to give your user feedback.
 
+## Running The Test Suite
+
+We use [tox](https://tox.readthedocs.org/en/latest/)
+to run our tests against various combinations
+of python/Django/Celery.
+We only officially support
+the combinations listed in our `.travis.yml` file,
+but we're working on
+([Issue 33](https://github.com/PolicyStat/jobtastic/issues/33))
+supporting everything defined in `tox.ini`.
+Until then,
+you can run tests against supported combos with:
+
+    $ pip install tox
+    $ tox -e py26-django1.4.X-djangocelery2.5.X-celery2.5.X
+
+Our test suite currently only tests usage with Django,
+which is definitely a [bug](https://github.com/PolicyStat/jobtastic/issues/15).
+Especially if you use Jobtastic with Flask,
+we would love a pull request.
+
+## Dynamic Time Estimates via JobtasticMixins
+
+Have tasks whose duration is difficult to estimate
+or that doesn't have smooth progress?
+[JobtasticMixins](https://github.com/abbasovalex/JobtasticMixins)
+to the rescue!
+
+JobtasticMixins provides an `AVGTimeRedis` mixin
+that stores duration date in a Redis backend.
+It then automatically uses this stored historical data
+to calculate an estimate.
+For more details,
+check out [JobtasticMixins](https://github.com/abbasovalex/JobtasticMixins)
+on github.
+
 ## Is it Awesome?
 
 Yes. Increasingly so.
 
-## A note on usage with Flask
+## Project Status
+
+Jobtastic is currently known to work
+with Django 1.3-1.5 and Celery 2.5-3.0.
+The goal is to support those versions and newer.
+Please file issues if there are problems
+with newer versions of Django/Celery.
+
+### A note on usage with Flask
 
 If you're using Flask instead of Django,
 then the only currently-supported way to work with Jobtastic
@@ -423,23 +504,7 @@ though,
 and pull requests
 (see [Issue 8](https://github.com/PolicyStat/jobtastic/issues/8) )
 or suggestions are very welcome.
-
-## Project Status
-
-Jobtastic is being used in production on a large Django project
-with RabbitMQ as a broker
-and Memcached as a result backend.
-If that's your configuration,
-then you're in good shape.
-For other configurations,
-there are probably bugs that will need to be ironed out.
-Please file them!
-
-Jobtastic is currently known to work
-with Django 1.3.x and Celery 2.5.x.
-The goal is to support those versions and newer.
-Please file issues if there are problems
-with newer versions of Django/Celery.
+We'd also love some Flask-specific tests!
 
 ## Non-affiliation
 

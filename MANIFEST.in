@@ -1,8 +1,12 @@
-include setup.py
 include AUTHORS
 include CHANGELOG.rst
 include LICENSE
 include MANIFEST.in
 include README.md
+include setup.py
+include tox.ini
 recursive-include jobtastic *.py
-prune *.pyc
+recursive-include requirements *.txt
+recursive-include test_projects *.py
+prune jobtastic/*.pyc
+prune test_projects/*.pyc
